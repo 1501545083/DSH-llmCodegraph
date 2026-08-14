@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #1e2430; color: #e6e9f0; font-family: system-ui, sans-serif; }
+  .llmg-root { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid #3a4254; border-radius: 10px; background: #161b26; font-size: 13px; }
+  .llmg-body { display: flex; gap: 8px; min-height: 480px; }
+  .llmg-canvas-wrap { flex: 1; border: 1px solid #3a4254; border-radius: 8px; overflow: hidden; position: relative; background: #1e2430; }
+  .llmg-canvas-wrap svg { display: block; width: 100%; height: 100%; }
+  .llmg-edge { stroke: #3a4254; stroke-width: 1; }
+  .llmg-node-label { fill: #e6e9f0; font-size: 10px; pointer-events: none; }
+  .llmg-legend { position: absolute; left: 8px; bottom: 8px; display: flex; gap: 10px; font-size: 10px; color: #9aa4b8; background: #161b26; padding: 3px 8px; border-radius: 6px; border: 1px solid #3a4254; }
+</style>
+</head>
+<body>
+<div class="llmg-root">
+  <div class="llmg-body">
+    <div class="llmg-canvas-wrap" id="wrap">
+      <svg id="svg" viewBox="0 0 900 560" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+  </div>
+</div>
+<script>
+const KIND_COLORS = { function: '#5b8def', method: '#2fbfa3', class: '#b07ce8', constructor: '#b07ce8', const: '#e8a04c', module: '#8a94a6' }
+
+// ---- real data (47 symbols / 39 edges, from the plugin dump) ----
+const NODES = [
+  {id:"src\\inventory.ts::Inventory",name:"Inventory",kind:"class"},
+  {id:"src\\inventory.ts::Inventory.reserve",name:"reserve",kind:"method"},
+  {id:"src\\inventory.ts::Inventory.priceOf",name:"priceOf",kind:"method"},
+  {id:"src\\inventory.ts::Inventory.priceTable",name:"priceTable",kind:"method"},
+  {id:"src\\inventory.ts::Inventory.hasStock",name:"hasStock",kind:"method"},
+  {id:"src\\inventory.ts::Inventory.refresh",name:"refresh",kind:"method"},
+  {id:"src\\legacy\\LegacyCalc.java::LegacyCalc",name:"LegacyCalc",kind:"class"},
+  {id:"src\\legacy\\LegacyCalc.java::LegacyCalc.add",name:"add",kind:"method"},
+  {id:"src\\legacy\\LegacyCalc.java::LegacyCalc.mul",name:"mul",kind:"method"},
+  {id:"src\\legacy\\LegacyCalc.java::LegacyCalc.main",name:"main",kind:"method"},
+  {id:"src\\main.ts::main",name:"main",kind:"function"},
+  {id:"src\\main.ts::bootstrap",name:"bootstrap",kind:"function"},
+  {id:"src\\order.service.ts::OrderService",name:"OrderService",kind:"class"},
+  {id:"src\\order.service.ts::OrderService.constructor",name:"constructor",kind:"constructor"},
+  {id:"src\\order.service.ts::OrderService.createOrder",name:"createOrder",kind:"method"},
+  {id:"src\\order.service.ts::OrderService.calculateTotal",name:"calculateTotal",kind:"method"},
+  {id:"src\\order.service.ts::OrderService.applyDiscount",name:"applyDiscount",kind:"method"},
+  {id:"src\\order.service.ts::OrderService.round2",name:"round2",kind:"method"},
+  {id:"src\\order.service.ts::OrderService.markPaid",name:"markPaid",kind:"method"},
+  {id:"src\\order.service.ts::OrderService.loadCatalog",name:"loadCatalog",kind:"method"},
+  {id:"src\\order.service.ts::OrderService.notifyCreated",name:"notifyCreated",kind:"method"},
+  {id:"src\\payment.service.ts::PaymentService",name:"PaymentService",kind:"class"},
+  {id:"src\\payment.service.ts::PaymentService.charge",name:"charge",kind:"method"},
+  {id:"src\\payment.service.ts::PaymentService.refund",name:"refund",kind:"method"},
+  {id:"src\\store\\cart.go::Cart",name:"Cart",kind:"class"},
+  {id:"src\\store\\cart.go::NewCart",name:"NewCart",kind:"function"},
+  {id:"src\\store\\cart.go::Cart.Add",name:"Add",kind:"method"},
+  {id:"src\\store\\cart.go::Cart.Remove",name:"Remove",kind:"method"},
+  {id:"src\\store\\cart.go::Cart.Total",name:"Total",kind:"method"},
+  {id:"src\\store\\cart.go::Cart.Checkout",name:"Checkout",kind:"method"},
+  {id:"src\\store\\cart.go::Cart.pay",name:"pay",kind:"method"},
+  {id:"src\\store\\cart.go::Cart.priceOf",name:"priceOf",kind:"method"},
+  {id:"src\\util\\logger.ts::info",name:"info",kind:"function"},
+  {id:"src\\util\\logger.ts::warn",name:"warn",kind:"function"},
+  {id:"src\\util\\logger.ts::error",name:"error",kind:"function"},
+  {id:"src\\worker.py::TaskQueue",name:"TaskQueue",kind:"class"},
+  {id:"src\\worker.py::TaskQueue.__init__",name:"__init__",kind:"constructor"},
+  {id:"src\\worker.py::TaskQueue.push",name:"push",kind:"method"},
+  {id:"src\\worker.py::TaskQueue.pop",name:"pop",kind:"method"},
+  {id:"src\\worker.py::Worker",name:"Worker",kind:"class"},
+  {id:"src\\worker.py::Worker.__init__",name:"__init__",kind:"constructor"},
+  {id:"src\\worker.py::Worker.run",name:"run",kind:"method"},
+  {id:"src\\worker.py::Worker.process",name:"process",kind:"method"},
+  {id:"src\\worker.py::Worker.compute",name:"compute",kind:"method"},
+  {id:"src\\worker.py::Worker.double",name:"double",kind:"method"},
+  {id:"src\\worker.py::Worker.report",name:"report",kind:"method"},
+  {id:"src\\worker.py::main",name:"main",kind:"function"}
+]
+const EDGES = [
+  ["src\\inventory.ts::Inventory.reserve","src\\inventory.ts::Inventory.hasStock"],
+  ["src\\inventory.ts::Inventory.priceOf","src\\inventory.ts::Inventory.priceTable"],
+  ["src\\legacy\\LegacyCalc.java::LegacyCalc.main","src\\legacy\\LegacyCalc.java::LegacyCalc.add"],
+  ["src\\legacy\\LegacyCalc.java::LegacyCalc.main","src\\legacy\\LegacyCalc.java::LegacyCalc.mul"],
+  ["src\\main.ts::main","src\\order.service.ts::OrderService.constructor"],
+  ["src\\main.ts::main","src\\order.service.ts::OrderService.constructor"],
+  ["src\\main.ts::main","src\\order.service.ts::OrderService.constructor"],
+  ["src\\main.ts::main","src\\order.service.ts::OrderService.createOrder"],
+  ["src\\main.ts::main","src\\util\\logger.ts::info"],
+  ["src\\main.ts::bootstrap","src\\order.service.ts::OrderService.constructor"],
+  ["src\\main.ts::bootstrap","src\\inventory.ts::Inventory.refresh"],
+  ["src\\main.ts::bootstrap","src\\order.service.ts::OrderService.constructor"],
+  ["src\\main.ts::bootstrap","src\\order.service.ts::OrderService.constructor"],
+  ["src\\main.ts::bootstrap","src\\order.service.ts::OrderService.markPaid"],
+  ["src\\order.service.ts::OrderService.constructor","src\\order.service.ts::OrderService.loadCatalog"],
+  ["src\\order.service.ts::OrderService.createOrder","src\\order.service.ts::OrderService.calculateTotal"],
+  ["src\\order.service.ts::OrderService.createOrder","src\\inventory.ts::Inventory.reserve"],
+  ["src\\order.service.ts::OrderService.createOrder","src\\payment.service.ts::PaymentService.charge"],
+  ["src\\order.service.ts::OrderService.createOrder","src\\order.service.ts::OrderService.notifyCreated"],
+  ["src\\order.service.ts::OrderService.calculateTotal","src\\inventory.ts::Inventory.priceOf"],
+  ["src\\order.service.ts::OrderService.calculateTotal","src\\order.service.ts::OrderService.applyDiscount"],
+  ["src\\order.service.ts::OrderService.applyDiscount","src\\order.service.ts::OrderService.round2"],
+  ["src\\order.service.ts::OrderService.applyDiscount","src\\order.service.ts::OrderService.round2"],
+  ["src\\order.service.ts::OrderService.markPaid","src\\payment.service.ts::PaymentService.refund"],
+  ["src\\payment.service.ts::PaymentService.charge","src\\util\\logger.ts::info"],
+  ["src\\payment.service.ts::PaymentService.refund","src\\util\\logger.ts::info"],
+  ["src\\store\\cart.go::Cart.Total","src\\store\\cart.go::Cart.priceOf"],
+  ["src\\store\\cart.go::Cart.Checkout","src\\store\\cart.go::Cart.Total"],
+  ["src\\store\\cart.go::Cart.Checkout","src\\store\\cart.go::Cart.pay"],
+  ["src\\worker.py::Worker.run","src\\worker.py::TaskQueue.pop"],
+  ["src\\worker.py::Worker.run","src\\worker.py::Worker.process"],
+  ["src\\worker.py::Worker.process","src\\worker.py::Worker.compute"],
+  ["src\\worker.py::Worker.process","src\\worker.py::Worker.report"],
+  ["src\\worker.py::Worker.compute","src\\worker.py::Worker.double"],
+  ["src\\worker.py::main","src\\worker.py::TaskQueue"],
+  ["src\\worker.py::main","src\\worker.py::TaskQueue.push"],
+  ["src\\worker.py::main","src\\worker.py::TaskQueue.push"],
+  ["src\\worker.py::main","src\\worker.py::Worker"],
+  ["src\\worker.py::main","src\\worker.py::Worker.run"]
+]
+
+function forceLayout(nodes, edges, W, H) {
+  const N = nodes.length
+  if (!N) return []
+  const pos = new Array(N)
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2
+    pos[i] = { x: W / 2 + Math.cos(a) * Math.min(W, H) * 0.32, y: H / 2 + Math.sin(a) * Math.min(W, H) * 0.32, vx: 0, vy: 0 }
+  }
+  const idx = new Map()
+  nodes.forEach((n, i) => idx.set(n.id, i))
+  const links = []
+  for (const e of edges) {
+    const a = idx.get(e[0]), b = idx.get(e[1])
+    if (a !== undefined && b !== undefined) links.push([a, b])
+  }
+  const REP = 5200, SPRING = 0.055, REST = 130, GRAV = 0.008, DAMP = 0.82
+  for (let it = 0; it < 170; it++) {
+    for (let i = 0; i < N; i++) pos[i].vx *= DAMP, pos[i].vy *= DAMP
+    for (let i = 0; i < N; i++) {
+      for (let j = i + 1; j < N; j++) {
+        const dx = pos[j].x - pos[i].x, dy = pos[j].y - pos[i].y
+        const d2 = Math.max(1, dx * dx + dy * dy)
+        const f = REP / d2
+        const d = Math.sqrt(d2)
+        const fx = (dx / d) * f, fy = (dy / d) * f
+        pos[i].vx -= fx; pos[i].vy -= fy; pos[j].vx += fx; pos[j].vy += fy
+      }
+    }
+    for (const [a, b] of links) {
+      const dx = pos[b].x - pos[a].x, dy = pos[b].y - pos[a].y
+      const d = Math.max(1, Math.sqrt(dx * dx + dy * dy))
+      const f = (d - REST) * SPRING
+      const fx = (dx / d) * f, fy = (dy / d) * f
+      pos[a].vx += fx; pos[a].vy += fy; pos[b].vx -= fx; pos[b].vy -= fy
+    }
+    for (let i = 0; i < N; i++) {
+      pos[i].vx -= (pos[i].x - W / 2) * GRAV
+      pos[i].vy -= (pos[i].y - H / 2) * GRAV
+      pos[i].x += pos[i].vx
+      pos[i].y += pos[i].vy
+    }
+  }
+  return pos
+}
+
+// ---- run the same layout + fit + render the same SVG structure ----
+const W = 900, H = 560
+const pos = forceLayout(NODES, EDGES, W, H)
+const laid = NODES.map((n, i) => Object.assign({}, n, { x: pos[i].x, y: pos[i].y }))
+
+let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+for (const n of laid) {
+  minX = Math.min(minX, n.x - 60); maxX = Math.max(maxX, n.x + 60)
+  minY = Math.min(minY, n.y - 20); maxY = Math.max(maxY, n.y + 20)
+}
+const w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY)
+const k = Math.min(1, 780 / w, 480 / h)
+const view = { x: 60 + (780 - w * k) / 2 - minX * k, y: 20 + (480 - h * k) / 2 - minY * k, k }
+
+const svg = document.getElementById('svg')
+let out = ''
+out += '<g transform="translate(' + view.x + ',' + view.y + ') scale(' + view.k + ')">'
+for (const e of EDGES) {
+  const a = laid.find((n) => n.id === e[0])
+  const b = laid.find((n) => n.id === e[1])
+  if (!a || !b) continue
+  out += '<line x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '" class="llmg-edge" stroke-width="1"/>'
+}
+out += '</g>'
+out += '<g transform="translate(' + view.x + ',' + view.y + ') scale(' + view.k + ')">'
+for (const n of laid) {
+  const color = KIND_COLORS[n.kind] || '#8a94a6'
+  out += '<g>'
+  out += '<circle cx="' + n.x + '" cy="' + n.y + '" r="12" fill="' + color + '" stroke="rgba(0,0,0,0.25)" stroke-width="1"/>'
+  out += '<text class="llmg-node-label" x="' + (n.x + 16) + '" y="' + (n.y + 4) + '">' + n.name + '</text>'
+  out += '</g>'
+}
+out += '</g>'
+svg.innerHTML = out
+
+const legend = document.createElement('div')
+legend.className = 'llmg-legend'
+legend.innerHTML = '<span>● 函数</span><span>● 方法</span><span>● 类</span><span>● 构造</span>'
+document.getElementById('wrap').appendChild(legend)
+
+console.log('view =', JSON.stringify(view), 'nodes =', laid.length, 'edges =', EDGES.length)
+</script>
+</body>
+</html>

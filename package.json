@@ -1,0 +1,29 @@
+{
+  "name": "@local/dsh-llm-codegraph",
+  "version": "0.1.0",
+  "description": "LLM 代码知识图谱（静态插件版）：逐文件 LLM 分析符号与调用关系（文件+精确行号），调用图/逻辑图双视图，3s 监听实时更新，附带 codegraph_analyze/query/dump 工具。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "HANDOVER.md"
+  ],
+  "license": "MIT"
+}

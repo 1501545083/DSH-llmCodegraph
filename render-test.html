@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- 独立渲染测试页：当前主要验证调用图 SVG 渲染；逻辑图（入口/步骤/判断/结束 + 条件边标签）由 client.js 的逻辑图模式渲染 -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -122,7 +123,7 @@ function forceLayout(nodes, edges, W, H) {
   const pos = new Array(N)
   for (let i = 0; i < N; i++) {
     const a = (i / N) * Math.PI * 2
-    pos[i] = { x: W / 2 + Math.cos(a) * Math.min(W, H) * 0.32, y: H / 2 + Math.sin(a) * Math.min(W, H) * 0.32, vx: 0, vy: 0 }
+    pos[i] = { x: W / 2 + Math.cos(a) * Math.min(W, H) * 0.38, y: H / 2 + Math.sin(a) * Math.min(W, H) * 0.38, vx: 0, vy: 0 }
   }
   const idx = new Map()
   nodes.forEach((n, i) => idx.set(n.id, i))
@@ -131,15 +132,15 @@ function forceLayout(nodes, edges, W, H) {
     const a = idx.get(e[0]), b = idx.get(e[1])
     if (a !== undefined && b !== undefined) links.push([a, b])
   }
-  const REP = 5200, SPRING = 0.055, REST = 130, GRAV = 0.008, DAMP = 0.82
-  for (let it = 0; it < 170; it++) {
+  const REP = 9000, SPRING = 0.06, REST = 140, GRAV = 0.004, DAMP = 0.8
+  for (let it = 0; it < 230; it++) {
     for (let i = 0; i < N; i++) pos[i].vx *= DAMP, pos[i].vy *= DAMP
     for (let i = 0; i < N; i++) {
       for (let j = i + 1; j < N; j++) {
         const dx = pos[j].x - pos[i].x, dy = pos[j].y - pos[i].y
-        const d2 = Math.max(1, dx * dx + dy * dy)
-        const f = REP / d2
+        const d2 = Math.max(16, dx * dx + dy * dy)
         const d = Math.sqrt(d2)
+        const f = Math.min(12000, REP / d2)
         const fx = (dx / d) * f, fy = (dy / d) * f
         pos[i].vx -= fx; pos[i].vy -= fy; pos[j].vx += fx; pos[j].vy += fy
       }
@@ -162,7 +163,8 @@ function forceLayout(nodes, edges, W, H) {
 }
 
 // ---- run the same layout + fit + render the same SVG structure ----
-const W = 900, H = 560
+const W = Math.max(900, Math.ceil(Math.sqrt(NODES.length)) * 250 + 360)
+const H = Math.max(560, Math.ceil(NODES.length / 5) * 82 + 190)
 const pos = forceLayout(NODES, EDGES, W, H)
 const laid = NODES.map((n, i) => Object.assign({}, n, { x: pos[i].x, y: pos[i].y }))
 

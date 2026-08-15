@@ -1,0 +1,8 @@
+# dsh-llm-codegraph bundle patch: mounts the plugin into a profile layer stack.
+# 静态插件版 LLM 代码知识图谱。host 半在 host 平面注册 codegraph_* 工具与
+# /llmg/api RPC 路由；client 半经 dsh.client 表挂载「代码图谱」会话标签。
+# 文件级 HMR：在 profile 的 cordis.patch.yml 里配 hmr root 指向本包 lib 目录，
+# 改 lib 下源码即热重载 host 半（client bundle 内容变更由 client HMR 推送）。
+- insert:
+    - id: llm-codegraph
+      name: '@local/dsh-llm-codegraph'

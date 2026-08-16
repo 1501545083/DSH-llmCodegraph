@@ -73,6 +73,7 @@ export const inject = ['timer', 'llm', 'fs', 'tools', 'webServer', 'subprocess']
 | `set-model` | 指定 LLM provider/model |
 | `get-graph` | `mode=call` 返回调用图；`mode=logic` 生成/返回逻辑图 |
 | `get-symbol` | 符号详情（调用者/被调用/未解析调用） |
+| `get-function-logic` | 指定符号的**函数级内部控制流图**（LLM 生成，供逻辑图最底层展开） |
 | `open-file` | 行号跳转（新增，见第 8 节） |
 | `get-model-options` | 列出可用模型 |
 | `query` | 基于图谱的 LLM 问答 |
@@ -106,7 +107,8 @@ export const inject = ['timer', 'llm', 'fs', 'tools', 'webServer', 'subprocess']
 - `resolveCallee()`：
   - 支持 `Class.method` 限定名 → 按 `method 小写` + `class` 精确匹配
   - 未限定时用小写名索引 `byName`
-  - 同文件唯一候选优先，多候选按 receiver 的 class 匹配，否则取第一个
+  - receiver 的 class 匹配优先；同文件唯一候选优先；
+    多候选时取函数体最长者（头文件声明 vs 实现时选实现），便于继续下钻。
 - `rebuildGraph()`：解析全部 calls 生成边，并计算每个符号 `degIn/degOut`。
 - `entries()`：**旧启发式**，`degIn==0 && degOut>0` 即入口（现在仅作兜底与调用图字段）。
 
@@ -139,7 +141,15 @@ export const inject = ['timer', 'llm', 'fs', 'tools', 'webServer', 'subprocess']
 - `LOGIC_RULES`：LLM 输出 `{nodes:[{id,type,label,detail,file,line}],edges:[{from,to,label}]}`，
   type ∈ `start|process|decision|end`。
 - `normalizeLogicDiagram()`：清洗类型/id/边，缺 start 时按 rootEntries 补，
-  BFS 计算每节点 layer。
+  BFS 计算每节点 layer，并用 `resolveSymbolAt(file,line)` 把节点绑回 `symbolId`。
+- **函数级内部逻辑（本轮新增）**：
+  - `FUNC_LOGIC_RULES` 只收一个函数的编号源码（`buildFunctionSource`，按 `startLine-endLine` 截取），
+    要求 LLM 输出该函数**内部**的 start/process/decision/end 控制流；调用类 process 节点必须带
+    `callee`（优先 `ClassName.method`，并从句柄构造推断，如 `auto cm = new CncTurningDimensions(); cm->execute()` → `CncTurningDimensions.execute`）。
+  - `nodeCalleeId()`：先把 `callee` 解析为项目符号；缺失时回退到该节点所在符号在
+    `line±1` 的已抽取 calls。
+  - `generateFunctionLogic(symbolId)` 按 `symbolId + graphRev` 在 `funcLogicCache` 缓存、`funcLogicPromises` 去重；
+    RPC `get-function-logic` 供 client 在逻辑图任意层级调用。
 - 结果按 `roots` key 缓存于 `logicCache`；图谱 rev 变化时提示“可点重新生成逻辑图刷新”。
 
 ### 3.9 模型工具
@@ -163,8 +173,10 @@ export const inject = ['timer', 'llm', 'fs', 'tools', 'webServer', 'subprocess']
 ### 4.1 主要状态
 
 `st`（插件状态）、`graph`（当前图）、`detail`、`rootInput`、`mode`（call/logic）、
-`rootId`（逻辑图当前根节点）、`logicHistory`（点击历史栈，新增）、
-`depth`、`search`、`selected`、`vb`（viewBox）、`layout` 等。
+`rootId`（逻辑图当前根节点）、`rootMeta`（函数符号根时保存被点节点的 label/file/line）、
+`logicHistory`（`[{id, meta}]` 点击历史栈）、`funcLogics`（symbolId → 函数级内部控制流缓存）、
+`logicView`（当前画布实际展开的子图）、`search`、`selected`、`vb`（viewBox）、`layout` 等。
+**逻辑图深度输入已移除**：不再有 `depth` 状态/控件。
 
 ### 4.2 布局
 
@@ -173,16 +185,27 @@ export const inject = ['timer', 'llm', 'fs', 'tools', 'webServer', 'subprocess']
 - `boxSize`/`truncateText` 按 CJK≈11px、拉丁≈6px 估算文本宽度。
 - 视口：滚轮缩放、左键平移、节点拖拽。
 
-### 4.3 逻辑图交互（本轮新增返回栈）
+### 4.3 逻辑图交互（初始主入口 + 无限下钻）
 
-- 点击逻辑图节点（画布或右侧层级树）→ 记录点击顺序：把**当前 rootId** 压入 `logicHistory`，
-  再以该节点为新根重新分层。
-- 点击“↺ 自动（主入口）”同样先入栈再回自动根。
-- 画布**左上角**新增「← 返回上次层级」按钮：
+- **深度设置已关闭**：逻辑图不再显示数值深度输入框。
+- **初始状态只画主入口**：`rootId=null` 时 `recomputeLogicGraph` 只取 `entry/start` 节点，不展示任何下层。
+- 点击某个主入口后，以它为根**固定展开下面两层**：
+  - 第 1 层：业务逻辑图中该入口的直接后继节点；
+  - 第 2 层（最低层）：对每个有 `symbolId` 的第 1 层节点调用 `get-function-logic`，
+    把 LLM 生成的**函数内部控制流**（start/process/decision/end）画在画布最底层
+    （虚线边框、按 `subLayer` 在列内纵向排列）；无函数映射时才回退画业务图的再下一层。
+  - 入口没有业务后继时，直接展开入口函数自身的内部逻辑。
+- **无限下钻**：函数内部节点若代表“调用另一个项目函数”（host 已解析出 `calleeId`），
+  点击它会把被调函数设为新根，整图切换成被调函数的内部控制流（如“执行标注”→
+  `CncTurningDimensions::execute` 内部）；该图里的调用类步骤又可继续点击下钻。
+  画布/层级树中这类节点 tooltip 显示“点击继续下钻”，右侧栏有「继续下钻」按钮。
+  无 `calleeId` 的内部节点只选中看详情。
+- 点击“↺ 自动（主入口）”返回初始“仅主入口”状态。
+- 画布**左上角**「← 返回上次层级」按钮：
   - 逻辑图模式常驻，无历史时置灰；
-  - 每点一次弹出一层，可连续点击逐层返回。
-- 切换模式 / 图谱重新生成 / 根节点失效时清空历史栈。
-- 右侧层级树：`treeLayersOf(graph)` 按 layer 分组，`第 N 层（M 个）`。
+  - 历史栈保存 `{id, meta}`，可逐层返回项目根或函数根。
+- 切换模式 / 图谱重新生成 / 根节点失效时清空历史栈与函数级逻辑缓存。
+- 右侧层级树：`treeLayersOf(logicView)` 只列当前画布实际展示的层级；函数根视图标题为“层级树（函数内部逻辑）”。
 
 ### 4.4 源码跳转（本轮新增行号）
 
@@ -246,12 +269,24 @@ DSH 的 `workspaces.openPath(path)` 底层只做 `Invoke-Item -LiteralPath`（Wi
 - `buildLogicContext`：主入口所在文件整文件注入。
 - 缓存：`cachePathCandidates` 项目根 + 工作区兜底；save/restore 依次尝试；root 校验。
 - 新增 `open-file` RPC + `editorCandidates` / `tryRunEditor`；inject 增加 `subprocess`。
+- **逻辑图渐进展开 + 函数级内部逻辑（本次新增）**：
+  - 新增 `FUNC_LOGIC_SYSTEM_PROMPT` / `FUNC_LOGIC_RULES` / `buildFunctionSource` /
+    `generateFunctionLogic`；新增 RPC `get-function-logic`。
+  - `normalizeLogicDiagram` 新增 `resolveSymbolAt(file,line)` 与 `nodeCalleeId()`，
+    给每个逻辑节点绑定 `symbolId` 与被调函数 `calleeId`。
+  - `FUNC_LOGIC_RULES` 要求调用类步骤输出 `callee`（可推断句柄构造，如 `cm->execute` → `CncTurningDimensions.execute`）。
+  - 新增 `funcLogicCache` / `funcLogicPromises`，`setupRoot` 时清空；缓存命中时也会补齐 symbolId/calleeId。
 
 `lib/client.js`：
 
 - `openFile(rel, line)` 行号跳转；所有“转至源码”/右键/未解析调用入口接行号。
-- 新增 `logicHistory` 栈、`logicNodeClick` / `logicRootClick` / `logicBack`、左上角返回按钮。
+- 新增 `logicHistory`（`{id, meta}`）栈、`logicNodeClick` / `logicRootClick` / `logicBack`、左上角返回按钮。
 - 状态栏显示缓存错误。
+- **逻辑图深度设置关闭（本次新增）**：移除 `depth` 状态与工具栏深度输入。
+- 初始只展示主入口；点击入口固定展开两层，最底层自动请求
+  `get-function-logic` 并绘制函数内部控制流节点（`funcLogics`/`funcLoading`/`logicView`）。
+- **无限下钻（本次新增）**：`rootMeta` 记录函数根元信息；`calleeId` 节点可把被调函数
+  设为新根并整图展示其内部逻辑，再往下逐层点击调用类步骤继续钻。
 - `package.json` `files` 中 `README.md` 改为 `HANDOVER.md`（README 已从仓库删除）。
 
 ## 9. 维护速查
@@ -268,10 +303,16 @@ node --check "C:\Users\15766\Documents\DSH全局文件夹\DSH-llmCodegraph\lib\c
 
 1. 重启 DSH → 打开「代码图谱」标签。
 2. 载入 `E:\CaxaPlugin\CaxaPlugin\CaxaPlugin` → 点「LLM 分析」。
-3. 看逻辑图第一层应为 4 个命令入口；状态栏 note 显示“LLM 从 N 个主入口生成”。
-4. 详情点「转至源码」→ VS Code 跳到对应行。
-5. 连续点击逻辑图节点 → 左上角「← 返回上次层级」逐层回退。
-6. 缓存：项目根不可写时状态栏不再报错，缓存文件落在
+3. 切到「逻辑图」：初始应**只有 4 个命令入口**，且工具栏没有深度输入框；
+   状态栏显示“仅展示主入口”。
+4. 点击任一入口：展开下面两层；第 2 层出现虚线边框的函数内部控制流节点
+   （生成期间状态栏显示“函数内部逻辑生成中…”）。
+5. 在函数内部层点击「执行标注」（tooltip 显示“点击继续下钻”）→ 画布应切换为
+   `CncTurningDimensions::execute` 的内部控制流；继续点击其中的调用类步骤仍可下钻。
+6. 详情点「转至源码」→ VS Code 跳到对应行。
+7. 连续点击逻辑图节点 → 左上角「← 返回上次层级」逐层回退；
+   点“↺ 自动（主入口）”回到仅入口视图。
+8. 缓存：项目根不可写时状态栏不再报错，缓存文件落在
    `C:\Users\15766\Documents\DSH全局文件夹\.dsh-llm-codegraph-<md5>.json`。
 
 ## 10. 相关外部知识（踩坑记录）
